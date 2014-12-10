@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<beans xmlns="http://www.springframework.org/schema/beans"
+       xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+       xmlns:context="http://www.springframework.org/schema/context"
+       xsi:schemaLocation="http://www.springframework.org/schema/beans
+       http://www.springframework.org/schema/beans/spring-beans.xsd http://www.springframework.org/schema/context http://www.springframework.org/schema/context/spring-context.xsd
+       ">
+
+    <context:property-placeholder
+            location="classpath*:kafka.properties,amazons3.properties"
+            ignore-unresolvable="true"/>
+
+    <!--<bean id="amazonAWSCredentials" class="com.amazonaws.auth.profile.InstanceProfileCredentialsProvider"/>-->
+    <bean id="amazonS3" class="com.amazonaws.services.s3.AmazonS3Client">
+        <!--<constructor-arg ref="amazonAWSCredentials" />-->
+    </bean>
+    <bean id="objectMapper" class="org.codehaus.jackson.map.ObjectMapper"/>
+    <bean id="s3EventAnalyzer" class="co.mimosa.kafka.s3.S3EventAnalyzer" >
+        <constructor-arg type="com.amazonaws.services.s3.AmazonS3Client" ref="amazonS3"/>
+        <constructor-arg type="java.lang.String" value="${s3_bucket}" />
+        <constructor-arg type="java.lang.String" value="${s3_id}" />
+        <constructor-arg type="java.lang.String" value="${NEWLINE_REPLACEMENT}"/>
+        <constructor-arg type="java.lang.String" value="${DIR_SEPARATOR}"/>
+        <constructor-arg type="org.codehaus.jackson.map.ObjectMapper" ref="objectMapper"/>
+        <constructor-arg type="co.mimosa.kafka.producer.MimosaProducer" ref="mimosaProducer"/>
+    </bean>
+    <bean id="taskExecutor"
+          class="org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor">
+        <property name="corePoolSize" value="${numThreads}" />
+        <property name="maxPoolSize" value="${numThreads}" />
+        <property name="WaitForTasksToCompleteOnShutdown" value="true" />
+    </bean>
+    <bean id="mimosaProducer" class="co.mimosa.kafka.producer.MimosaProducer">
+        <constructor-arg type="java.lang.String" value="${broker.list}" />
+    </bean>
+    <bean id="kafkaConsumer" class="co.mimosa.kafka.consumer.KafkaMultiThreadedConsumer">
+        <property name="topic" value="${topic}"/>
+        <property name="executorService" ref="taskExecutor"/>
+        <property name="numThreads" value="${numThreads}"/>
+        <property name="zookeeperConnection" value="${zookeeperConnection}"/>
+        <property name="groupId" value="${groupId}"/>
+        <property name="zookeeperSessionTimeOutMs" value="${zookeeperSessionTimeOutMs}"/>
+        <property name="zookeeperSyncTimeMs" value="${zookeeperSyncTimeMs}"/>
+        <property name="autoCommitIntervalMs" value="${autoCommitIntervalMs}"/>
+        <property name="eventAnalyzer" ref="s3EventAnalyzer" />
+
+    </bean>
+
+</beans>
