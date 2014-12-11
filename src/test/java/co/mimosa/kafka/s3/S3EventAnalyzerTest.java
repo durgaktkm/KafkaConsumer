@@ -35,7 +35,7 @@ public class S3EventAnalyzerTest {
     newLineReplacement ="#";
     dirSeparator = "/";
     objectMapper = mock(ObjectMapper.class);
-    eventAnalyzer = new S3EventAnalyzer(amazonS3,s3Bucket,s3Id,newLineReplacement,dirSeparator,objectMapper,null);
+    eventAnalyzer = new S3EventAnalyzer(amazonS3,s3Bucket,s3Id,newLineReplacement,dirSeparator,objectMapper,null,null);
 
   }
 

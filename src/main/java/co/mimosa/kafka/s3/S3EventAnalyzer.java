@@ -36,9 +36,10 @@ public class S3EventAnalyzer implements IEventAnalyzer {
   private final String dirSeparator;
   private final ObjectMapper objectMapper;
   private final MimosaProducer producer;
+  private String errorTopic;
 
   public S3EventAnalyzer(AmazonS3Client amazonS3Client, String s3Bucket, String s3Id,
-       String newLineReplacement, String dirSeparator,ObjectMapper objectMapper,MimosaProducer producer) {
+       String newLineReplacement, String dirSeparator,ObjectMapper objectMapper,MimosaProducer producer,String errorTopic) {
 
     s3Client = amazonS3Client;
     this.s3Bucket = s3Bucket;
@@ -47,31 +48,28 @@ public class S3EventAnalyzer implements IEventAnalyzer {
     this.dirSeparator = dirSeparator;
     this.objectMapper = objectMapper;
     this.producer = producer;
+    this.errorTopic = errorTopic;
   }
 
 
 
   void uploadData(String keyName, S3File deviceResponseDetail) {
     System.out.printf("received data for s3");
+
     try {
-      String data ;
+      String data="" ;
       try {
         data = objectMapper.writeValueAsString(deviceResponseDetail);
       } catch (Exception e) {
-        //TODO Q for Venkatesh
         logger.error("Error while creating JSON string for S3");
-        throw new RuntimeException(e);
+        PutObjectResult result = putS3File(keyName, data);
+        return;
       }
-      System.out.println("uploading to s3");
+      System.out.print("....uploading to s3");
       logger.debug("Uploading a new object to S3 from a file\n");
-      ObjectMetadata objectMetadata = new ObjectMetadata();
-      objectMetadata.setContentLength(data.length());
-
-
-      PutObjectResult result = s3Client.putObject(new PutObjectRequest(s3Bucket, keyName, new ByteArrayInputStream(data.getBytes()),
-          objectMetadata));
+      PutObjectResult result = putS3File(keyName, data);
       logger.debug("S3 Response + " + result);
-     /// throw new AmazonServiceException("my Exeception");
+      System.out.println("....done");
     } catch (AmazonServiceException ase) {
       logger.warn("Error while uploading device action response on S3");
       logger.debug("Caught an AmazonServiceException, which " + "means your request made it "
@@ -91,6 +89,14 @@ public class S3EventAnalyzer implements IEventAnalyzer {
       throw ace;
     }
   }
+
+  private PutObjectResult putS3File(String keyName,  String data) {
+    ObjectMetadata objectMetadata = new ObjectMetadata();
+    objectMetadata.setContentLength(data.length());
+    return s3Client.putObject(new PutObjectRequest(s3Bucket, keyName, new ByteArrayInputStream(data.getBytes()),
+        objectMetadata));
+  }
+
   String getMatchingString(Pattern pattern, String jsonString) {
     Matcher matcher = pattern.matcher(jsonString);
     if(matcher.find())
@@ -100,6 +106,7 @@ public class S3EventAnalyzer implements IEventAnalyzer {
 
   @Override public Boolean analyze(String eventJsonString) {
     String eventType;
+    String serialNumber;
     eventJsonString = eventJsonString.replaceAll("\n", newLineReplacement);
     int eventDataEllipsisSize = (eventJsonString.length() > 65 ? 65 : eventJsonString.length());
     logger.debug("Hash replaced content={}", eventJsonString.substring(0, eventDataEllipsisSize).trim() + "...");
@@ -107,61 +114,32 @@ public class S3EventAnalyzer implements IEventAnalyzer {
     cal.setTime(new Date());
 
     try{
-      String serialNumber = getMatchingString(SERIALNUMBER_PATTERN, eventJsonString);
+      serialNumber = getMatchingString(SERIALNUMBER_PATTERN, eventJsonString);
       eventType = getMatchingString(EVENT_TYPE_PATTERN, eventJsonString);
+    }catch(Exception e){
+      String key = s3Id+dirSeparator+cal.get(Calendar.YEAR)+dirSeparator+(cal.get(Calendar.MONTH)+1)+dirSeparator+cal.get(Calendar.DAY_OF_MONTH)+dirSeparator+"unknown"+dirSeparator+"unknown_"+cal.getTimeInMillis()+".json";
+      putS3File(key, eventJsonString);
+      return true;
+    }
+
+    try{
+
       S3File file = new S3File();
       file.setRaw_json(eventJsonString);
       file.setSerialNumber(serialNumber);
       file.setTime_stamp(cal.getTimeInMillis());
-      //TODO remove after talking to venkatesh. This may be performance issue .
-      if(!s3Client.doesBucketExist(s3Bucket)) {
-        s3Client.createBucket(s3Bucket);
-      }
+//      //TODO remove after talking to venkatesh. This may be performance issue .
+//      if(!s3Client.doesBucketExist(s3Bucket)) {
+//        s3Client.createBucket(s3Bucket);
+//      }
       String key = s3Id+dirSeparator+cal.get(Calendar.YEAR)+dirSeparator+(cal.get(Calendar.MONTH)+1)+dirSeparator+cal.get(Calendar.DAY_OF_MONTH)+dirSeparator+serialNumber+dirSeparator+eventType+dirSeparator+eventType+"_"+cal.getTimeInMillis()+".json";
       uploadData(key,file);
     }catch(Exception e){
       logger.error("Error while uploading JSON string to S3"+e.getMessage());
-      //TODO Q for Venkatesh.
-      //Resolution is to put in a separate queue here.
-      return false;
+       //Resolution is to put in a separate queue here.
+      producer.sendDataToKafka(errorTopic,eventJsonString);
     }
     return true;
   }
-
-
-
-//  public void setAwsCredentials(ProfileCredentialsProvider awsCredentials) {
-//    this.awsCredentials = awsCredentials;
-//  }
-//
-//
-//
-//  public void setS3Client(AmazonS3Client s3Client) {
-//    this.s3Client = s3Client;
-//  }
-//
-//
-//
-//  public void setS3Bucket(String s3Bucket) {
-//    this.s3Bucket = s3Bucket;
-//  }
-//
-//
-//
-//  public void setS3Id(String s3Id) {
-//    this.s3Id = s3Id;
-//  }
-//
-//
-//
-//  public void setNewLineReplacement(String newLineReplacement) {
-//    this.newLineReplacement = newLineReplacement;
-//  }
-//
-//
-//
-//  public void setDirSeparator(String dirSeparator) {
-//    this.dirSeparator = dirSeparator;
-//  }
 
 }
