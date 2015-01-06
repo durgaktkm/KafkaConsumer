@@ -2,6 +2,7 @@ package co.mimosa.kafka.s3;
 
 import co.mimosa.kafka.callable.IEventAnalyzer;
 import co.mimosa.kafka.producer.MimosaProducer;
+import co.mimosa.kafka.valueobjects.GateWayData;
 import com.amazonaws.AmazonClientException;
 import com.amazonaws.AmazonServiceException;
 import com.amazonaws.services.s3.AmazonS3Client;
@@ -61,19 +62,17 @@ public class S3EventAnalyzer implements IEventAnalyzer {
       try {
         data = objectMapper.writeValueAsString(deviceResponseDetail);
       } catch (Exception e) {
-        logger.error("Error while creating JSON string for S3");
-        PutObjectResult result = putS3File(keyName, data);
-        return;
+        logger.error("Error while creating JSON string for S3 resending data to kafka");
+        throw new RuntimeException(e);
       }
-      System.out.print("....uploading to s3");
+      logger.debug("....uploading to s3");
       logger.debug("Uploading a new object to S3 from a file\n");
       PutObjectResult result = putS3File(keyName, data);
       logger.debug("S3 Response + " + result);
-      System.out.println("....done");
     } catch (AmazonServiceException ase) {
       logger.warn("Error while uploading device action response on S3");
       logger.debug("Caught an AmazonServiceException, which " + "means your request made it "
-          + "to Amazon S3, but was rejected with an error response" + " for some reason.");
+          + "to Amazon S3, but was rejected with an error response : " );
       logger.debug("Error Message:    " + ase.getMessage());
       logger.debug("HTTP Status Code: " + ase.getStatusCode());
       logger.debug("AWS Error Code:   " + ase.getErrorCode());
@@ -104,42 +103,65 @@ public class S3EventAnalyzer implements IEventAnalyzer {
     return null;
   }
 
-  @Override public Boolean analyze(String eventJsonString) {
-    String eventType;
-    String serialNumber;
-    eventJsonString = eventJsonString.replaceAll("\n", newLineReplacement);
-    int eventDataEllipsisSize = (eventJsonString.length() > 65 ? 65 : eventJsonString.length());
-    logger.debug("Hash replaced content={}", eventJsonString.substring(0, eventDataEllipsisSize).trim() + "...");
-    Calendar cal  = new GregorianCalendar();
+  @Override public Boolean analyze(String messageKey, GateWayData data) {
+    Calendar cal = new GregorianCalendar();
     cal.setTime(new Date());
+    if(!data.isFileData()) {
+      String eventJsonString= data.getContents();
+      String eventType;
+      String serialNumber;
+      eventJsonString = eventJsonString.replaceAll("\n", newLineReplacement);
+      int eventDataEllipsisSize = (eventJsonString.length() > 65 ? 65 : eventJsonString.length());
+      logger.debug("Hash replaced content={}", eventJsonString.substring(0, eventDataEllipsisSize).trim() + "...");
 
-    try{
-      serialNumber = getMatchingString(SERIALNUMBER_PATTERN, eventJsonString);
-      eventType = getMatchingString(EVENT_TYPE_PATTERN, eventJsonString);
-    }catch(Exception e){
-      String key = s3Id+dirSeparator+cal.get(Calendar.YEAR)+dirSeparator+(cal.get(Calendar.MONTH)+1)+dirSeparator+cal.get(Calendar.DAY_OF_MONTH)+dirSeparator+"unknown"+dirSeparator+"unknown_"+cal.getTimeInMillis()+".json";
-      putS3File(key, eventJsonString);
-      return true;
-    }
 
-    try{
+      try {
+        serialNumber = getMatchingString(SERIALNUMBER_PATTERN, eventJsonString);
+        eventType = getMatchingString(EVENT_TYPE_PATTERN, eventJsonString);
+      } catch (Exception e) {
+        String key =
+            s3Id + dirSeparator + cal.get(Calendar.YEAR) + dirSeparator + (cal.get(Calendar.MONTH) + 1) + dirSeparator
+                + cal.get(Calendar.DAY_OF_MONTH) + dirSeparator + "unknown" + dirSeparator + cal.get(Calendar.HOUR_OF_DAY)+ dirSeparator +"unknown_" + cal
+                .getTimeInMillis() + ".json";
+        putS3File(key, eventJsonString);
+        return true;
+      }
 
-      S3File file = new S3File();
-      file.setRaw_json(eventJsonString);
-      file.setSerialNumber(serialNumber);
-      file.setTime_stamp(cal.getTimeInMillis());
-//      //TODO remove after talking to venkatesh. This may be performance issue .
-//      if(!s3Client.doesBucketExist(s3Bucket)) {
-//        s3Client.createBucket(s3Bucket);
-//      }
-      String key = s3Id+dirSeparator+cal.get(Calendar.YEAR)+dirSeparator+(cal.get(Calendar.MONTH)+1)+dirSeparator+cal.get(Calendar.DAY_OF_MONTH)+dirSeparator+serialNumber+dirSeparator+eventType+dirSeparator+eventType+"_"+cal.getTimeInMillis()+".json";
-      uploadData(key,file);
-    }catch(Exception e){
-      logger.error("Error while uploading JSON string to S3"+e.getMessage());
-       //Resolution is to put in a separate queue here.
-      producer.sendDataToKafka(errorTopic,eventJsonString);
+      try {
+
+        S3File file = new S3File();
+        file.setRaw_json(eventJsonString);
+        file.setSerialNumber(serialNumber);
+        file.setTime_stamp(cal.getTimeInMillis());
+        String key =
+            s3Id + dirSeparator + cal.get(Calendar.YEAR) + dirSeparator + (cal.get(Calendar.MONTH) + 1) + dirSeparator
+                + cal.get(Calendar.DAY_OF_MONTH) + dirSeparator + eventType + dirSeparator
+                + serialNumber + dirSeparator + cal.get(Calendar.HOUR_OF_DAY) + dirSeparator + eventType + "_" + cal.getTimeInMillis()
+                + ".json";
+        uploadData(key, file);
+      } catch (Exception e) {
+        logger.error("Error while uploading JSON string to S3" + e.getMessage());
+        producer.sendDataToKafka(errorTopic,messageKey, data);
+      }
+    }else {
+      String eventType = data.getFileName();
+      cal.setTimeInMillis(data.getTimeStamp());
+      String key =
+          s3Id + dirSeparator + cal.get(Calendar.YEAR) + dirSeparator + (cal.get(Calendar.MONTH) + 1) + dirSeparator
+              + cal.get(Calendar.DAY_OF_MONTH) + dirSeparator + eventType + dirSeparator
+              + messageKey + dirSeparator + cal.get(Calendar.HOUR_OF_DAY) + dirSeparator + eventType + "_" + cal
+              .getTimeInMillis()
+              + ".json";
+
+      try {
+        putS3File(key, data.getContents());
+      }catch (Exception e){
+        logger.error("Error while uploading File data to S3" + e.getMessage());
+        producer.sendDataToKafka(errorTopic,messageKey, data);
+      }
     }
     return true;
   }
+
 
 }
